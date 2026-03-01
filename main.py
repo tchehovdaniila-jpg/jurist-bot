@@ -169,21 +169,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text("❌ Ошибка создания PDF. Вот текст договора:\n\n" + template)
     
-    elif "купля" in text:
-        template = TEMPLATES.get("купля", "")
-        await update.message.reply_text("⏳ Создаю PDF...")
-        
-        pdf_path = create_pdf_from_text(template, "dogovor_kupli.pdf")
-        if pdf_path and os.path.exists(pdf_path):
-            with open(pdf_path, 'rb') as pdf_file:
-                await update.message.reply_document(
-                    document=pdf_file,
-                    filename="Договор_купли_продажи.pdf",
-                    caption="✅ Ваш договор купли-продажи готов!"
-                )
-            os.unlink(pdf_path)
-        else:
-            await update.message.reply_text("❌ Ошибка создания PDF. Вот текст договора:\n\n" + template)
+    elif "покупка" in text:
+    template = TEMPLATES.get("покупка", "")
+    await update.message.reply_text("⏳ Создаю PDF...")
+    
+    pdf_path = create_pdf_from_text(template, "dogovor_kupli.pdf")
+    if pdf_path and os.path.exists(pdf_path):
+        with open(pdf_path, 'rb') as pdf_file:
+            await update.message.reply_document(
+                document=pdf_file,
+                filename="Договор_купли_продажи.pdf",
+                caption="✅ Ваш договор купли-продажи готов!"
+            )
+        os.unlink(pdf_path)
+    else:
+        await update.message.reply_text("❌ Ошибка создания PDF. Вот текст договора:\n\n" + template)
     
     elif "услуги" in text:
         template = TEMPLATES.get("услуги", "")
