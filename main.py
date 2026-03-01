@@ -1,25 +1,25 @@
 import os
 import logging
-import openai
+import httpx
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
 # Настройка логирования
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+logging.basicConfig(format='%(astime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Получаем токены из переменных окружения
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
-OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
+SILICONFLOW_API_KEY = os.environ.get('SILICONFLOW_API_KEY')
 
 # Проверяем, что токены есть
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN не найден в переменных окружения")
-if not OPENAI_API_KEY:
-    raise ValueError("OPENAI_API_KEY не найден в переменных окружения")
+if not SILICONFLOW_API_KEY:
+    raise ValueError("SILICONFLOW_API_KEY не найден в переменных окружения")
 
-# Настраиваем OpenAI
-openai.api_key = OPENAI_API_KEY
+# URL для SiliconFlow API (используем модель DeepSeek-R1, которая хорошо понимает русский)
+API_URL = "https://api.siliconflow.com/v1/chat/completions"
 
 # Словарь с шаблонами договоров
 TEMPLATES = {
@@ -66,24 +66,39 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     else:
-        # Если нет шаблона, используем GPT
+        # Если нет шаблона, используем SiliconFlow
         await update.message.reply_text("⏳ Думаю над твоим договором...")
         
         try:
-            response = await openai.ChatCompletion.acreate(
-                model="gpt-3.5-turbo",
-                messages=[
+            # Подготовка запроса к SiliconFlow
+            headers = {
+                "Authorization": f"Bearer {SILICONFLOW_API_KEY}",
+                "Content-Type": "application/json"
+            }
+            
+            payload = {
+                "model": "deepseek-ai/DeepSeek-R1",  # Хорошая модель для русского языка
+                "messages": [
                     {"role": "system", "content": "Ты помощник, который составляет юридические договоры на русском языке. Отвечай кратко и по делу."},
                     {"role": "user", "content": f"Составь договор по запросу: {user_message}"}
                 ],
-                max_tokens=1000,
-                temperature=0.7
-            )
-            answer = response.choices[0].message.content
+                "max_tokens": 1000,
+                "temperature": 0.7
+            }
+            
+            # Отправляем запрос
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(API_URL, json=payload, headers=headers)
+                response.raise_for_status()
+                result = response.json()
+                
+            # Извлекаем ответ
+            answer = result['choices'][0]['message']['content']
             await update.message.reply_text(f"📝 Вот что получилось:\n\n{answer}")
+            
         except Exception as e:
-            logger.error(f"Ошибка OpenAI: {e}")
-            await update.message.reply_text("❌ Ошибка при обращении к GPT. Попробуй позже.")
+            logger.error(f"Ошибка SiliconFlow: {e}")
+            await update.message.reply_text("❌ Ошибка при обращении к нейросети. Попробуй позже.")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда помощи"""
