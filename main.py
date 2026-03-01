@@ -4,7 +4,6 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler, CallbackQueryHandler
 from fpdf import FPDF
 import tempfile
-import re
 from datetime import datetime
 
 # Настройка логирования
@@ -14,13 +13,30 @@ logger = logging.getLogger(__name__)
 # Токен бота
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
 
-# Состояния для разговора (анкеты)
+# Состояния для разговора
 CHOOSING, FILLING_ARENDA, FILLING_POKUPKA, FILLING_USLUGI = range(4)
 
-# Словарь для хранения временных данных пользователя
+# Временные данные пользователей
 user_data = {}
 
-# Шаблоны договоров (красивые, с полями)
+# Класс для PDF с поддержкой русского
+class PDF(FPDF):
+    def __init__(self):
+        super().__init__()
+        # Добавляем поддержку Unicode
+        self.add_font('DejaVu', '', 'DejaVuSans.ttf', uni=True)
+        
+    def header(self):
+        # Можно добавить логотип или шапку
+        pass
+        
+    def footer(self):
+        # Номера страниц
+        self.set_y(-15)
+        self.set_font('DejaVu', '', 8)
+        self.cell(0, 10, f'Страница {self.page_no()}', 0, 0, 'C')
+
+# Шаблоны договоров
 TEMPLATES = {
     "аренда": {
         "name": "Договор аренды квартиры",
@@ -158,29 +174,23 @@ __________________                          __________________
 }
 
 def create_pdf_from_template(template_text, filename="contract.pdf"):
-    """Создаёт PDF из текста шаблона"""
+    """Создаёт PDF из текста шаблона с поддержкой русского"""
     try:
-        pdf = FPDF()
+        # Создаём PDF
+        pdf = PDF()
         pdf.add_page()
-        pdf.set_font('Helvetica', size=12)
+        pdf.set_font('DejaVu', '', 12)
         
         # Разбиваем текст на строки
         lines = template_text.split('\n')
         
+        # Добавляем строки
         for line in lines:
             if line.strip() == '':
                 pdf.ln(5)
             else:
-                # Пробуем разные кодировки
-                try:
-                    pdf.cell(0, 10, txt=line, ln=True)
-                except:
-                    try:
-                        line_win = line.encode('windows-1251', 'ignore').decode('windows-1251')
-                        pdf.cell(0, 10, txt=line_win, ln=True)
-                    except:
-                        line_ascii = line.encode('ascii', 'ignore').decode('ascii')
-                        pdf.cell(0, 10, txt=line_ascii, ln=True)
+                # Для русских букв используем Unicode
+                pdf.multi_cell(0, 8, line)
         
         # Сохраняем
         with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
@@ -189,10 +199,29 @@ def create_pdf_from_template(template_text, filename="contract.pdf"):
             
     except Exception as e:
         logger.error(f"Ошибка PDF: {e}")
-        return None
+        # Пробуем без специальных шрифтов
+        try:
+            pdf = FPDF()
+            pdf.add_page()
+            pdf.set_font('Helvetica', size=12)
+            
+            lines = template_text.split('\n')
+            for line in lines:
+                if line.strip() == '':
+                    pdf.ln(5)
+                else:
+                    # Пробуем windows-1251
+                    line_win = line.encode('windows-1251', 'ignore').decode('windows-1251')
+                    pdf.cell(0, 10, txt=line_win, ln=True)
+            
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
+                pdf.output(tmp.name)
+                return tmp.name
+        except:
+            return None
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Приветствие и меню с кнопками"""
+    """Приветствие и меню"""
     keyboard = [
         [InlineKeyboardButton("🏠 Аренда квартиры", callback_data='arend')],
         [InlineKeyboardButton("💰 Купля-продажа", callback_data='pokupka')],
@@ -202,14 +231,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.message.reply_text(
-        "👋 Добро пожаловать в бота для создания договоров!\n\n"
-        "Выберите тип договора, который хотите составить:",
+        "👋 Добро пожаловать!\n\n"
+        "Я помогу составить договор. Просто выберите нужный тип:",
         reply_markup=reply_markup
     )
     return CHOOSING
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка нажатий на кнопки"""
+    """Обработка кнопок"""
     query = update.callback_query
     await query.answer()
     
@@ -267,10 +296,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(
             "❓ Как это работает:\n\n"
             "1. Выберите тип договора\n"
-            "2. Ответьте на несколько вопросов\n"
-            "3. Получите готовый PDF-договор\n"
+            "2. Ответьте на вопросы\n"
+            "3. Получите готовый PDF\n"
             "4. Распечатайте и подпишите\n\n"
-            "Выберите тип договора:",
+            "Выберите тип:",
             reply_markup=reply_markup
         )
         return CHOOSING
@@ -288,29 +317,23 @@ async def handle_arend_filling(update: Update, context: ContextTypes.DEFAULT_TYP
     fields = user_data[user_id]['fields']
     field_name = fields[current]['name']
     
-    # Сохраняем ответ
     user_data[user_id]['answers'][field_name] = text
     
-    # Переходим к следующему вопросу
     if current + 1 < len(fields):
         user_data[user_id]['current_field'] = current + 1
         next_field = fields[current + 1]
         await update.message.reply_text(f"✅ Принято!\n\n{next_field['question']}")
         return FILLING_ARENDA
     else:
-        # Все вопросы заданы - генерируем договор
         await update.message.reply_text("⏳ Создаю договор...")
         
-        # Получаем шаблон
         template_data = TEMPLATES[user_data[user_id]['contract_type']]
         template_text = template_data['template']
         
-        # Подставляем ответы
         filled_text = template_text
         for key, value in user_data[user_id]['answers'].items():
             filled_text = filled_text.replace(f"{{{key}}}", value)
         
-        # Создаём PDF
         pdf_path = create_pdf_from_template(filled_text)
         
         if pdf_path and os.path.exists(pdf_path):
@@ -318,11 +341,10 @@ async def handle_arend_filling(update: Update, context: ContextTypes.DEFAULT_TYP
                 await update.message.reply_document(
                     document=pdf_file,
                     filename=f"{template_data['name']}.pdf",
-                    caption="✅ Ваш договор готов!\n\nОсталось только распечатать и подписать."
+                    caption="✅ Ваш договор готов!\n\nОсталось распечатать и подписать."
                 )
             os.unlink(pdf_path)
             
-            # Предлагаем создать ещё
             keyboard = [
                 [InlineKeyboardButton("🏠 Аренда", callback_data='arend')],
                 [InlineKeyboardButton("💰 Купля", callback_data='pokupka')],
@@ -337,12 +359,11 @@ async def handle_arend_filling(update: Update, context: ContextTypes.DEFAULT_TYP
         else:
             await update.message.reply_text("❌ Ошибка создания PDF. Попробуйте позже.")
         
-        # Очищаем данные пользователя
         del user_data[user_id]
         return ConversationHandler.END
 
 async def handle_pokupka_filling(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Заполнение анкеты для покупки"""
+    """Заполнение для покупки"""
     user_id = update.message.from_user.id
     text = update.message.text
     
@@ -378,7 +399,7 @@ async def handle_pokupka_filling(update: Update, context: ContextTypes.DEFAULT_T
                 await update.message.reply_document(
                     document=pdf_file,
                     filename=f"{template_data['name']}.pdf",
-                    caption="✅ Ваш договор готов!\n\nОсталось только распечатать и подписать."
+                    caption="✅ Ваш договор готов!\n\nОсталось распечатать и подписать."
                 )
             os.unlink(pdf_path)
             
@@ -400,7 +421,7 @@ async def handle_pokupka_filling(update: Update, context: ContextTypes.DEFAULT_T
         return ConversationHandler.END
 
 async def handle_uslugi_filling(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Заполнение анкеты для услуг"""
+    """Заполнение для услуг"""
     user_id = update.message.from_user.id
     text = update.message.text
     
@@ -436,7 +457,7 @@ async def handle_uslugi_filling(update: Update, context: ContextTypes.DEFAULT_TY
                 await update.message.reply_document(
                     document=pdf_file,
                     filename=f"{template_data['name']}.pdf",
-                    caption="✅ Ваш договор готов!\n\nОсталось только распечатать и подписать."
+                    caption="✅ Ваш договор готов!\n\nОсталось распечатать и подписать."
                 )
             os.unlink(pdf_path)
             
@@ -466,7 +487,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда помощи"""
+    """Помощь"""
     keyboard = [
         [InlineKeyboardButton("🏠 Аренда", callback_data='arend')],
         [InlineKeyboardButton("💰 Купля", callback_data='pokupka')],
@@ -475,21 +496,18 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.message.reply_text(
-        "❓ Помощь по использованию:\n\n"
-        "1. Выберите нужный тип договора из меню\n"
-        "2. Ответьте на несколько простых вопросов\n"
-        "3. Получите готовый PDF-договор\n"
-        "4. Распечатайте и подпишите\n\n"
-        "Выберите тип договора:",
+        "❓ Помощь:\n\n"
+        "1. Выберите тип договора\n"
+        "2. Ответьте на вопросы\n"
+        "3. Получите PDF\n\n"
+        "Выберите тип:",
         reply_markup=reply_markup
     )
 
 def main():
-    """Запуск бота"""
-    # Создаём приложение
+    """Запуск"""
     app = Application.builder().token(BOT_TOKEN).build()
     
-    # Создаём обработчик разговора
     conv_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(button_handler)],
         states={
