@@ -184,7 +184,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         os.unlink(pdf_path)
     else:
         await update.message.reply_text("❌ Ошибка создания PDF. Вот текст договора:\n\n" + template)
-    
+        
     elif "услуги" in text:
         template = TEMPLATES.get("услуги", "")
         await update.message.reply_text("⏳ Создаю PDF...")
