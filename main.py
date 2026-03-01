@@ -43,7 +43,7 @@ TEMPLATES = {
 Арендодатель: _______________ /___________________/
 Арендатор: _______________ /___________________/""",
 
-    "купля": """ДОГОВОР КУПЛИ-ПРОДАЖИ
+    "покупка": """ДОГОВОР КУПЛИ-ПРОДАЖИ
 
 г. ______________                «___» __________ 20__ г.
 
@@ -92,47 +92,34 @@ TEMPLATES = {
 
 def clean_text_for_pdf(text):
     """Очищает текст от спецсимволов для PDF"""
-    # Заменяем спецсимволы на безопасные
     text = text.replace('—', '-')
     text = text.replace('«', '"')
     text = text.replace('»', '"')
     text = text.replace('…', '...')
-    # Удаляем управляющие символы
     text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', '', text)
     return text
 
 def create_pdf_from_text(text, filename="contract.pdf"):
     """Создаёт PDF файл из текста"""
     try:
-        # Очищаем текст
         clean_text = clean_text_for_pdf(text)
         
-        # Создаём PDF
         pdf = FPDF()
         pdf.add_page()
+        pdf.set_font("Helvetica", size=12)
         
-        # Устанавливаем шрифт (UTF-8)
-        pdf.add_font('DejaVu', '', 'DejaVuSans.ttf', uni=True)  # Попробуем стандартный
-        pdf.set_font('Helvetica', size=12)  # Запасной вариант
-        
-        # Разбиваем текст на строки
         lines = clean_text.split('\n')
         
-        # Добавляем каждую строку
         for line in lines:
-            # Если строка пустая, добавляем перевод строки
             if line.strip() == '':
                 pdf.ln(5)
             else:
-                # Кодируем в latin-1, заменяя проблемные символы
                 try:
                     pdf.cell(0, 10, txt=line, ln=True)
                 except:
-                    # Если ошибка, пробуем упрощённую версию
                     simple_line = line.encode('latin-1', 'ignore').decode('latin-1')
                     pdf.cell(0, 10, txt=simple_line, ln=True)
         
-        # Сохраняем во временный файл
         with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
             pdf.output(tmp.name)
             return tmp.name
@@ -143,19 +130,17 @@ def create_pdf_from_text(text, filename="contract.pdf"):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Привет! Я бот для создания договоров.\n"
-        "Напиши: аренда, купля, услуги\n"
+        "Напиши: аренда, покупка, услуги\n"
         "Я пришлю готовый PDF-файл с договором!"
     )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.lower()
     
-    # Проверяем шаблоны
     if "аренда" in text:
         template = TEMPLATES.get("аренда", "")
         await update.message.reply_text("⏳ Создаю PDF...")
         
-        # Создаём PDF
         pdf_path = create_pdf_from_text(template, "dogovor_arendy.pdf")
         if pdf_path and os.path.exists(pdf_path):
             with open(pdf_path, 'rb') as pdf_file:
@@ -164,27 +149,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     filename="Договор_аренды.pdf",
                     caption="✅ Ваш договор аренды готов!"
                 )
-            # Удаляем временный файл
             os.unlink(pdf_path)
         else:
             await update.message.reply_text("❌ Ошибка создания PDF. Вот текст договора:\n\n" + template)
     
     elif "покупка" in text:
-    template = TEMPLATES.get("покупка", "")
-    await update.message.reply_text("⏳ Создаю PDF...")
-    
-    pdf_path = create_pdf_from_text(template, "dogovor_kupli.pdf")
-    if pdf_path and os.path.exists(pdf_path):
-        with open(pdf_path, 'rb') as pdf_file:
-            await update.message.reply_document(
-                document=pdf_file,
-                filename="Договор_купли_продажи.pdf",
-                caption="✅ Ваш договор купли-продажи готов!"
-            )
-        os.unlink(pdf_path)
-    else:
-        await update.message.reply_text("❌ Ошибка создания PDF. Вот текст договора:\n\n" + template)
+        template = TEMPLATES.get("покупка", "")
+        await update.message.reply_text("⏳ Создаю PDF...")
         
+        pdf_path = create_pdf_from_text(template, "dogovor_kupli.pdf")
+        if pdf_path and os.path.exists(pdf_path):
+            with open(pdf_path, 'rb') as pdf_file:
+                await update.message.reply_document(
+                    document=pdf_file,
+                    filename="Договор_купли_продажи.pdf",
+                    caption="✅ Ваш договор купли-продажи готов!"
+                )
+            os.unlink(pdf_path)
+        else:
+            await update.message.reply_text("❌ Ошибка создания PDF. Вот текст договора:\n\n" + template)
+    
     elif "услуги" in text:
         template = TEMPLATES.get("услуги", "")
         await update.message.reply_text("⏳ Создаю PDF...")
@@ -202,7 +186,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Ошибка создания PDF. Вот текст договора:\n\n" + template)
     
     else:
-        # Если нет шаблона - нейросеть
         await update.message.reply_text("⏳ Обращаюсь к нейросети...")
         
         try:
@@ -219,7 +202,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 r.raise_for_status()
                 answer = r.json()['choices'][0]['message']['content']
                 
-                # Создаём PDF из ответа нейросети
                 await update.message.reply_text("📄 Создаю PDF...")
                 pdf_path = create_pdf_from_text(answer, "generated.pdf")
                 if pdf_path and os.path.exists(pdf_path):
@@ -242,7 +224,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📚 Команды:\n"
         "/start - приветствие\n"
         "/help - помощь\n\n"
-        "Напиши: аренда, купля, услуги - получишь PDF"
+        "Напиши: аренда, покупка, услуги - получишь PDF"
     )
 
 def main():
