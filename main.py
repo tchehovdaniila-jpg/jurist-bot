@@ -7,7 +7,8 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.lib.units import mm
+from reportlab.lib.utils import ImageReader
+import io
 
 # Настройка логирования
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -23,29 +24,34 @@ CHOOSING, ASK_QUESTIONS = range(2)
 user_data = {}
 
 def create_pdf(text, filename="contract.pdf"):
-    """Создаёт PDF с русским текстом через reportlab"""
+    """Создаёт PDF с поддержкой русского через стандартный шрифт"""
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
             c = canvas.Canvas(tmp.name, pagesize=A4)
             width, height = A4
             
-            # Устанавливаем координаты
-            y = height - 40
+            # Используем стандартный шрифт, но кодируем русский в win-1251
+            c.setFont("Helvetica", 12)
             
-            # Разбиваем текст на строки
+            y = height - 40
             lines = text.split('\n')
             
             for line in lines:
                 if line.strip():
-                    # Просто рисуем строку (reportlab понимает русский)
-                    c.drawString(40, y, line)
+                    # Кодируем русские буквы в windows-1251
+                    try:
+                        line_enc = line.encode('windows-1251', 'ignore').decode('windows-1251')
+                    except:
+                        line_enc = line.encode('ascii', 'ignore').decode('ascii')
+                    
+                    c.drawString(40, y, line_enc)
                     y -= 15
                 else:
                     y -= 10
                 
-                # Если дошли до конца страницы
                 if y < 40:
                     c.showPage()
+                    c.setFont("Helvetica", 12)
                     y = height - 40
             
             c.save()
@@ -196,10 +202,8 @@ ____________________ /Исполнитель/              ____________________ 
                 )
             os.unlink(pdf_path)
         else:
-            # Если PDF не создался - отправляем текстом
             await update.message.reply_text(f"📄 Ваш договор:\n\n{contract}")
         
-        # Кнопка для нового договора
         keyboard = [[InlineKeyboardButton("🔄 Новый договор", callback_data='new')]]
         await update.message.reply_text(
             "Хотите создать ещё? Нажмите /start",
