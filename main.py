@@ -3,8 +3,8 @@ import logging
 import tempfile
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ConversationHandler, ContextTypes
-from reportlab.pdfgen import canvas
-from reportlab.lib.pagesizes import A4
+from fpdf import FPDF
+import unicodedata
 
 # Настройка логирования
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -20,44 +20,47 @@ if not BOT_TOKEN:
 CHOOSING, ASKING = range(2)
 user_data = {}
 
-# Функция создания PDF
+# Функция создания PDF с fpdf2
 def create_pdf(text, filename="contract.pdf"):
-    """Создаёт PDF с русским текстом"""
+    """Создаёт PDF с поддержкой русского через fpdf2"""
     try:
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.add_font('DejaVu', '', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', uni=True)
+        pdf.set_font('DejaVu', '', 12)
+        
+        lines = text.split('\n')
+        for line in lines:
+            if line.strip():
+                pdf.cell(0, 10, txt=line, ln=True)
+            else:
+                pdf.ln(5)
+        
         with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
-            c = canvas.Canvas(tmp.name, pagesize=A4)
-            width, height = A4
-            y = height - 50
-            
-            # Используем стандартный шрифт
-            c.setFont("Helvetica", 11)
-            
-            # Разбиваем текст на строки
-            lines = text.split('\n')
-            
-            for line in lines:
-                if y < 50:
-                    c.showPage()
-                    c.setFont("Helvetica", 11)
-                    y = height - 50
-                
-                if line.strip():
-                    # Кодируем русские буквы
-                    try:
-                        c.drawString(50, y, line.encode('windows-1251', 'ignore').decode('windows-1251'))
-                    except:
-                        c.drawString(50, y, line)
-                    y -= 15
-                else:
-                    y -= 10
-            
-            c.save()
+            pdf.output(tmp.name)
             return tmp.name
     except Exception as e:
         logger.error(f"PDF ошибка: {e}")
-        return None
+        # Запасной вариант без шрифтов
+        try:
+            pdf = FPDF()
+            pdf.add_page()
+            pdf.set_font("Helvetica", size=12)
+            lines = text.split('\n')
+            for line in lines:
+                if line.strip():
+                    # Простое кодирование
+                    pdf.cell(0, 10, txt=line.encode('latin-1', 'ignore').decode('latin-1'), ln=True)
+                else:
+                    pdf.ln(5)
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
+                pdf.output(tmp.name)
+                return tmp.name
+        except Exception as e2:
+            logger.error(f"Запасной PDF тоже не сработал: {e2}")
+            return None
 
-# Настоящие шаблоны договоров
+# Шаблоны договоров
 CONTRACTS = {
     'rent': {
         'name': 'Аренда квартиры',
@@ -169,6 +172,8 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Формируем текст договора
         contract_text = contract['template'].format(*user_data[user_id]['answers'])
         
+        await update.message.reply_text("📄 Создаю PDF...")
+        
         # Создаём PDF
         pdf_path = create_pdf(contract_text)
         
@@ -177,13 +182,11 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_document(
                     document=f,
                     filename=f"{contract['name']}.pdf",
-                    caption="✅ Ваш договор готов! Осталось подписать."
+                    caption="✅ Ваш договор готов!"
                 )
-            # Удаляем временный файл
             os.unlink(pdf_path)
         else:
-            # Если PDF не создался - отправляем текстом
-            await update.message.reply_text(f"📄 Ваш договор (PDF не создался):\n\n{contract_text}")
+            await update.message.reply_text(f"📄 Ваш договор (PDF временно недоступен):\n\n{contract_text}")
         
         del user_data[user_id]
         await update.message.reply_text("Хотите создать ещё? Нажмите /start")
@@ -197,7 +200,6 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 def main():
-    """Запуск бота"""
     application = Application.builder().token(BOT_TOKEN).build()
 
     conv_handler = ConversationHandler(
@@ -211,7 +213,7 @@ def main():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(conv_handler)
 
-    logger.info("✅ Бот с PDF запущен")
+    logger.info("✅ Бот запущен")
     application.run_polling()
 
 if __name__ == "__main__":
