@@ -1,7 +1,7 @@
 import os
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, MessageHandler, Filters, ConversationHandler
+from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ConversationHandler
 
 # Настройка логирования
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -79,7 +79,7 @@ def main():
 
     conv_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(button_handler)],
-        states={ASKING: [MessageHandler(Filters.text & ~Filters.command, handle_answer)]},
+        states={ASKING: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_answer)]},
         fallbacks=[CommandHandler('cancel', cancel)]
     )
 
