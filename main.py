@@ -7,7 +7,6 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.lib.utils import ImageReader
 import io
 
 # Настройка логирования
@@ -24,46 +23,35 @@ if not BOT_TOKEN:
 CHOOSING, ASKING = range(2)
 user_data = {}
 
-# Регистрируем шрифт с поддержкой кириллицы
-def register_fonts():
-    """Пытаемся зарегистрировать шрифт"""
-    try:
-        # Пробуем стандартный путь для DejaVu в Linux (Render)
-        font_path = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
-        if os.path.exists(font_path):
-            pdfmetrics.registerFont(TTFont('DejaVu', font_path))
-            logger.info("✅ Шрифт DejaVu зарегистрирован")
-            return 'DejaVu'
-        else:
-            logger.warning("Шрифт DejaVu не найден, использую Helvetica")
-            return 'Helvetica'
-    except Exception as e:
-        logger.error(f"Ошибка регистрации шрифта: {e}")
-        return 'Helvetica'
-
-# Регистрируем шрифт при запуске
-FONT_NAME = register_fonts()
-
+# Встроенный шрифт с поддержкой кириллицы (используем стандартный, но с кодировкой)
 def create_pdf(text, filename="contract.pdf"):
-    """Создаёт PDF с русским текстом"""
+    """Создаёт PDF с русским текстом через кодировку"""
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
             c = canvas.Canvas(tmp.name, pagesize=A4)
             width, height = A4
             y = height - 50
             
-            # Устанавливаем шрифт
-            c.setFont(FONT_NAME, 11)
+            # Используем стандартный шрифт, но кодируем текст в win1251
+            c.setFont("Helvetica", 11)
             
             lines = text.split('\n')
             for line in lines:
                 if y < 50:
                     c.showPage()
-                    c.setFont(FONT_NAME, 11)
+                    c.setFont("Helvetica", 11)
                     y = height - 50
                 
                 if line.strip():
-                    c.drawString(50, y, line)
+                    # Кодируем строку в windows-1251 для поддержки русского
+                    try:
+                        # Пробуем закодировать русские буквы
+                        encoded_line = line.encode('windows-1251', 'replace').decode('windows-1251')
+                    except:
+                        # Если не получается, просто используем как есть
+                        encoded_line = line
+                    
+                    c.drawString(50, y, encoded_line)
                     y -= 15
                 else:
                     y -= 10
@@ -80,7 +68,7 @@ CONTRACTS = {
         'name': 'Аренда квартиры',
         'questions': [
             '📍 Город:', 
-            '📅 Дата (например: 15 марта 2025):',
+            '📅 Дата (например: 15.03.2025):',
             '👤 ФИО Арендодателя:', 
             '📄 Паспорт Арендодателя (серия, номер):',
             '🏠 Адрес регистрации Арендодателя:',
