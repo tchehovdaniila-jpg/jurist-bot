@@ -1,64 +1,54 @@
 import os
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler, CallbackQueryHandler
+from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, MessageHandler, Filters, ConversationHandler
 
 # Настройка логирования
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Токен бота (обязательно должен быть в переменных окружения Render)
+# Токен
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
 if not BOT_TOKEN:
-    logger.error("Ошибка: BOT_TOKEN не найден в переменных окружения!")
-    # Выходим, чтобы Render показал ошибку в логах
+    logger.error("Нет токена!")
     exit(1)
 
-# Состояния диалога
+# Состояния
 CHOOSING, ASKING = range(2)
 user_data = {}
 
-# Шаблоны договоров
+# Простые шаблоны
 CONTRACTS = {
     'rent': {
-        'name': 'Аренда квартиры',
-        'questions': ['📍 Город:', '📅 Дата:', '👤 Ваше имя:', '🏠 Адрес:', '💰 Сумма:'],
+        'name': 'Аренда',
+        'questions': ['Город:', 'Дата:', 'Имя:', 'Адрес:', 'Сумма:'],
         'template': 'ДОГОВОР АРЕНДЫ\n\nГород: {}\nДата: {}\nИмя: {}\nАдрес: {}\nСумма: {} руб.\n\nПодписи:\n___________'
     },
     'sale': {
-        'name': 'Купля-продажа',
-        'questions': ['📍 Город:', '📅 Дата:', '👤 Ваше имя:', '📦 Товар:', '💰 Сумма:'],
+        'name': 'Покупка',
+        'questions': ['Город:', 'Дата:', 'Имя:', 'Товар:', 'Сумма:'],
         'template': 'ДОГОВОР КУПЛИ-ПРОДАЖИ\n\nГород: {}\nДата: {}\nИмя: {}\nТовар: {}\nСумма: {} руб.\n\nПодписи:\n___________'
     }
 }
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка команды /start"""
-    keyboard = [
-        [InlineKeyboardButton("🏠 Аренда", callback_data='rent')],
-        [InlineKeyboardButton("💰 Покупка", callback_data='sale')]
-    ]
-    await update.message.reply_text(
-        "Выберите тип договора:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+def start(update, context):
+    keyboard = [[InlineKeyboardButton("🏠 Аренда", callback_data='rent')],
+                [InlineKeyboardButton("💰 Покупка", callback_data='sale')]]
+    update.message.reply_text("Выберите:", reply_markup=InlineKeyboardMarkup(keyboard))
     return CHOOSING
 
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка нажатий на кнопки"""
+def button_handler(update, context):
     query = update.callback_query
-    await query.answer()
+    query.answer()
     user_id = query.from_user.id
-    contract_type = query.data
-    user_data[user_id] = {'type': contract_type, 'answers': [], 'step': 0}
-    await query.edit_message_text(CONTRACTS[contract_type]['questions'][0])
+    user_data[user_id] = {'type': query.data, 'answers': [], 'step': 0}
+    query.edit_message_text(CONTRACTS[query.data]['questions'][0])
     return ASKING
 
-async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка ответов"""
+def handle_answer(update, context):
     user_id = update.message.from_user.id
     if user_id not in user_data:
-        await update.message.reply_text("Начните с /start")
+        update.message.reply_text("Начните с /start")
         return ConversationHandler.END
 
     user_data[user_id]['answers'].append(update.message.text)
@@ -67,50 +57,38 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if step + 1 < len(contract['questions']):
         user_data[user_id]['step'] += 1
-        await update.message.reply_text(contract['questions'][step + 1])
+        update.message.reply_text(contract['questions'][step + 1])
         return ASKING
     else:
         result = contract['template'].format(*user_data[user_id]['answers'])
-        await update.message.reply_text(f"✅ Готово:\n\n{result}")
+        update.message.reply_text(f"✅ Договор:\n\n{result}")
         del user_data[user_id]
-
-        # Кнопка для нового договора
-        keyboard = [[InlineKeyboardButton("🔄 Новый договор", callback_data='new')]]
-        await update.message.reply_text(
-            "Хотите создать ещё? Нажмите /start",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+        update.message.reply_text("Новый? /start")
         return ConversationHandler.END
 
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отмена действия"""
+def cancel(update, context):
     user_id = update.message.from_user.id
     if user_id in user_data:
         del user_data[user_id]
-    await update.message.reply_text("Отменено. /start")
+    update.message.reply_text("Отменено. /start")
     return ConversationHandler.END
 
 def main():
-    """Основная функция запуска бота"""
-    # Создаем приложение
-    app = Application.builder().token(BOT_TOKEN).build()
+    updater = Updater(BOT_TOKEN, use_context=True)
+    dp = updater.dispatcher
 
-    # Создаем обработчик диалога
     conv_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(button_handler)],
-        states={
-            ASKING: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_answer)]
-        },
+        states={ASKING: [MessageHandler(Filters.text & ~Filters.command, handle_answer)]},
         fallbacks=[CommandHandler('cancel', cancel)]
     )
 
-    # Добавляем обработчики
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(conv_handler)
+    dp.add_handler(CommandHandler("start", start))
+    dp.add_handler(conv_handler)
 
-    logger.info("✅ Бот запущен и начинает опрос Telegram...")
-    # Запускаем бота (это бесконечный цикл)
-    app.run_polling()
+    logger.info("✅ Бот запускается...")
+    updater.start_polling()
+    updater.idle()
 
 if __name__ == "__main__":
     main()
