@@ -3,8 +3,12 @@ import logging
 import tempfile
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ConversationHandler, ContextTypes
-from fpdf import FPDF
-import unicodedata
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.lib.utils import ImageReader
+import io
 
 # Настройка логирования
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -20,45 +24,55 @@ if not BOT_TOKEN:
 CHOOSING, ASKING = range(2)
 user_data = {}
 
-# Функция создания PDF с fpdf2
-def create_pdf(text, filename="contract.pdf"):
-    """Создаёт PDF с поддержкой русского через fpdf2"""
+# Регистрируем шрифт с поддержкой кириллицы
+def register_fonts():
+    """Пытаемся зарегистрировать шрифт"""
     try:
-        pdf = FPDF()
-        pdf.add_page()
-        pdf.add_font('DejaVu', '', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', uni=True)
-        pdf.set_font('DejaVu', '', 12)
-        
-        lines = text.split('\n')
-        for line in lines:
-            if line.strip():
-                pdf.cell(0, 10, txt=line, ln=True)
-            else:
-                pdf.ln(5)
-        
+        # Пробуем стандартный путь для DejaVu в Linux (Render)
+        font_path = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
+        if os.path.exists(font_path):
+            pdfmetrics.registerFont(TTFont('DejaVu', font_path))
+            logger.info("✅ Шрифт DejaVu зарегистрирован")
+            return 'DejaVu'
+        else:
+            logger.warning("Шрифт DejaVu не найден, использую Helvetica")
+            return 'Helvetica'
+    except Exception as e:
+        logger.error(f"Ошибка регистрации шрифта: {e}")
+        return 'Helvetica'
+
+# Регистрируем шрифт при запуске
+FONT_NAME = register_fonts()
+
+def create_pdf(text, filename="contract.pdf"):
+    """Создаёт PDF с русским текстом"""
+    try:
         with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
-            pdf.output(tmp.name)
+            c = canvas.Canvas(tmp.name, pagesize=A4)
+            width, height = A4
+            y = height - 50
+            
+            # Устанавливаем шрифт
+            c.setFont(FONT_NAME, 11)
+            
+            lines = text.split('\n')
+            for line in lines:
+                if y < 50:
+                    c.showPage()
+                    c.setFont(FONT_NAME, 11)
+                    y = height - 50
+                
+                if line.strip():
+                    c.drawString(50, y, line)
+                    y -= 15
+                else:
+                    y -= 10
+            
+            c.save()
             return tmp.name
     except Exception as e:
         logger.error(f"PDF ошибка: {e}")
-        # Запасной вариант без шрифтов
-        try:
-            pdf = FPDF()
-            pdf.add_page()
-            pdf.set_font("Helvetica", size=12)
-            lines = text.split('\n')
-            for line in lines:
-                if line.strip():
-                    # Простое кодирование
-                    pdf.cell(0, 10, txt=line.encode('latin-1', 'ignore').decode('latin-1'), ln=True)
-                else:
-                    pdf.ln(5)
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
-                pdf.output(tmp.name)
-                return tmp.name
-        except Exception as e2:
-            logger.error(f"Запасной PDF тоже не сработал: {e2}")
-            return None
+        return None
 
 # Шаблоны договоров
 CONTRACTS = {
@@ -213,7 +227,7 @@ def main():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(conv_handler)
 
-    logger.info("✅ Бот запущен")
+    logger.info("✅ Бот с PDF запущен")
     application.run_polling()
 
 if __name__ == "__main__":
