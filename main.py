@@ -74,7 +74,7 @@ def cancel(update, context):
     return ConversationHandler.END
 
 def main():
-    updater = Updater(BOT_TOKEN, use_context=True)
+    updater = Updater(BOT_TOKEN)
     dp = updater.dispatcher
 
     conv_handler = ConversationHandler(
