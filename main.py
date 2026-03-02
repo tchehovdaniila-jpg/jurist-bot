@@ -3,7 +3,11 @@ import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler, CallbackQueryHandler
 import tempfile
-from fpdf import FPDF
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.lib.units import mm
 
 # Настройка логирования
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -19,24 +23,34 @@ CHOOSING, ASK_QUESTIONS = range(2)
 user_data = {}
 
 def create_pdf(text, filename="contract.pdf"):
-    """Создаёт PDF с русским текстом (Helvetica + кодировка)"""
+    """Создаёт PDF с русским текстом через reportlab"""
     try:
-        pdf = FPDF()
-        pdf.add_page()
-        pdf.set_font("Helvetica", size=12)
-        
-        lines = text.split('\n')
-        for line in lines:
-            if line.strip():
-                # Кодируем в windows-1251 для поддержки русского
-                line_enc = line.encode('windows-1251', 'ignore').decode('windows-1251')
-                pdf.cell(0, 8, txt=line_enc, ln=True)
-            else:
-                pdf.ln(4)
-        
         with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
-            pdf.output(tmp.name)
+            c = canvas.Canvas(tmp.name, pagesize=A4)
+            width, height = A4
+            
+            # Устанавливаем координаты
+            y = height - 40
+            
+            # Разбиваем текст на строки
+            lines = text.split('\n')
+            
+            for line in lines:
+                if line.strip():
+                    # Просто рисуем строку (reportlab понимает русский)
+                    c.drawString(40, y, line)
+                    y -= 15
+                else:
+                    y -= 10
+                
+                # Если дошли до конца страницы
+                if y < 40:
+                    c.showPage()
+                    y = height - 40
+            
+            c.save()
             return tmp.name
+            
     except Exception as e:
         logger.error(f"PDF ошибка: {e}")
         return None
@@ -59,53 +73,44 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     user_id = query.from_user.id
     
-    if query.data == 'rent':
-        user_data[user_id] = {
-            'type': 'rent',
-            'questions': [
-                '📍 Город:',
-                '📅 Дата (например: 15.03.2025):',
-                '👤 ФИО Арендатора:',
-                '🏠 Адрес квартиры:',
-                '💰 Сумма аренды (цифрами):',
-                '✍️ Сумма прописью:',
-                '⏱️ Срок аренды:'
-            ],
-            'answers': {},
-            'step': 0
-        }
-    elif query.data == 'sale':
-        user_data[user_id] = {
-            'type': 'sale',
-            'questions': [
-                '📍 Город:',
-                '📅 Дата:',
-                '👤 ФИО Продавца:',
-                '👤 ФИО Покупателя:',
-                '📦 Товар:',
-                '💰 Сумма (цифрами):',
-                '✍️ Сумма прописью:'
-            ],
-            'answers': {},
-            'step': 0
-        }
-    else:  # service
-        user_data[user_id] = {
-            'type': 'service',
-            'questions': [
-                '📍 Город:',
-                '📅 Дата:',
-                '👤 ФИО Исполнителя:',
-                '👤 ФИО Заказчика:',
-                '🔧 Услуга:',
-                '💰 Стоимость (цифрами):',
-                '✍️ Стоимость прописью:'
-            ],
-            'answers': {},
-            'step': 0
-        }
+    questions = {
+        'rent': [
+            '📍 Город:',
+            '📅 Дата (например: 15.03.2025):',
+            '👤 ФИО Арендатора:',
+            '🏠 Адрес квартиры:',
+            '💰 Сумма аренды (цифрами):',
+            '✍️ Сумма прописью:',
+            '⏱️ Срок аренды:'
+        ],
+        'sale': [
+            '📍 Город:',
+            '📅 Дата:',
+            '👤 ФИО Продавца:',
+            '👤 ФИО Покупателя:',
+            '📦 Товар:',
+            '💰 Сумма (цифрами):',
+            '✍️ Сумма прописью:'
+        ],
+        'service': [
+            '📍 Город:',
+            '📅 Дата:',
+            '👤 ФИО Исполнителя:',
+            '👤 ФИО Заказчика:',
+            '🔧 Услуга:',
+            '💰 Стоимость (цифрами):',
+            '✍️ Стоимость прописью:'
+        ]
+    }
     
-    await query.edit_message_text(user_data[user_id]['questions'][0])
+    user_data[user_id] = {
+        'type': query.data,
+        'questions': questions[query.data],
+        'answers': {},
+        'step': 0
+    }
+    
+    await query.edit_message_text(questions[query.data][0])
     return ASK_QUESTIONS
 
 async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -187,12 +192,12 @@ ____________________ /Исполнитель/              ____________________ 
                 await update.message.reply_document(
                     document=f,
                     filename="Договор.pdf",
-                    caption="✅ Ваш договор готов! Осталось подписать."
+                    caption="✅ Ваш договор готов!"
                 )
             os.unlink(pdf_path)
         else:
             # Если PDF не создался - отправляем текстом
-            await update.message.reply_text(f"📄 Ваш договор (PDF не создался):\n\n{contract}")
+            await update.message.reply_text(f"📄 Ваш договор:\n\n{contract}")
         
         # Кнопка для нового договора
         keyboard = [[InlineKeyboardButton("🔄 Новый договор", callback_data='new')]]
