@@ -1,13 +1,11 @@
 import os
 import logging
+import tempfile
+from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler, CallbackQueryHandler
-import tempfile
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
-import io
 
 # Настройка логирования
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -17,269 +15,260 @@ logger = logging.getLogger(__name__)
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
 
 # Состояния
-CHOOSING, ASK_QUESTIONS = range(2)
+SELECTING, FILLING = range(2)
 
-# Временные данные
-user_data = {}
+# Хранилище данных пользователей
+user_sessions = {}
 
-def create_pdf(text, filename="contract.pdf"):
-    """Создаёт PDF с русским текстом (Helvetica + win1251)"""
+# === ШАБЛОНЫ ДОГОВОРОВ ===
+CONTRACT_TEMPLATES = {
+    'rent': {
+        'name': 'Аренда квартиры',
+        'questions': [
+            '📍 Город:',
+            '📅 Дата (например: 15 марта 2025):',
+            '👤 ФИО Арендодателя полностью:',
+            '📄 Паспорт Арендодателя (серия, номер, кем выдан):',
+            '🏠 Адрес регистрации Арендодателя:',
+            '👤 ФИО Арендатора полностью:',
+            '📄 Паспорт Арендатора:',
+            '🏠 Адрес регистрации Арендатора:',
+            '🏢 Адрес сдаваемой квартиры:',
+            '💰 Сумма аренды в месяц (цифрами):',
+            '✍️ Сумма аренды прописью:',
+            '⏱️ Срок аренды:'
+        ],
+        'template': """ДОГОВОР АРЕНДЫ КВАРТИРЫ
+
+г. {0}                                    «{1}»
+
+Гражданин РФ {2}, паспорт: {3}, зарегистрированный по адресу: {4}, именуемый в дальнейшем "Арендодатель", с одной стороны, и
+
+Гражданин РФ {5}, паспорт: {6}, зарегистрированный по адресу: {7}, именуемый в дальнейшем "Арендатор", с другой стороны, заключили настоящий договор:
+
+1. ПРЕДМЕТ ДОГОВОРА
+1.1. Арендодатель передает Арендатору квартиру по адресу: {8}.
+
+2. АРЕНДНАЯ ПЛАТА
+2.1. Плата составляет {9} ({10}) рублей в месяц.
+
+3. СРОК ДЕЙСТВИЯ
+3.1. Договор действует {11}.
+
+4. ПОДПИСИ СТОРОН
+
+_______________ /Арендодатель/          _______________ /Арендатор/
+
+Дата: {1}"""
+    },
+    'sale': {
+        'name': 'Купля-продажа',
+        'questions': [
+            '📍 Город:', '📅 Дата:', '👤 ФИО Продавца:', '📄 Паспорт Продавца:',
+            '👤 ФИО Покупателя:', '📄 Паспорт Покупателя:', '📦 Товар:',
+            '💰 Сумма (цифрами):', '✍️ Сумма прописью:'
+        ],
+        'template': """ДОГОВОР КУПЛИ-ПРОДАЖИ
+
+г. {0}                                    «{1}»
+
+Продавец: {2}, паспорт: {3}
+Покупатель: {4}, паспорт: {5}
+
+1. ПРЕДМЕТ
+1.1. Продавец продает: {6}
+
+2. ЦЕНА
+2.1. Сумма: {7} ({8}) рублей.
+
+3. ПОДПИСИ
+
+_______________ /Продавец/          _______________ /Покупатель/
+
+Дата: {1}"""
+    },
+    'service': {
+        'name': 'Услуги',
+        'questions': [
+            '📍 Город:', '📅 Дата:', '👤 ФИО Исполнителя:', '👤 ФИО Заказчика:',
+            '🔧 Услуга:', '💰 Стоимость (цифрами):', '✍️ Стоимость прописью:', '⏱️ Срок:'
+        ],
+        'template': """ДОГОВОР ОКАЗАНИЯ УСЛУГ
+
+г. {0}                                    «{1}»
+
+Исполнитель: {2}
+Заказчик: {3}
+
+1. УСЛУГИ
+1.1. Исполнитель оказывает: {4}
+
+2. СТОИМОСТЬ
+2.1. Цена: {5} ({6}) рублей.
+
+3. СРОК
+3.1. Услуги оказываются: {7}
+
+4. ПОДПИСИ
+
+_______________ /Исполнитель/          _______________ /Заказчик/
+
+Дата: {1}"""
+    }
+}
+
+def generate_pdf(text, filename='contract.pdf'):
+    """Генерация PDF с русским текстом"""
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
             c = canvas.Canvas(tmp.name, pagesize=A4)
             width, height = A4
+            y = height - 50
             
-            # Используем Helvetica (есть везде)
-            c.setFont("Helvetica", 12)
+            # Используем стандартный шрифт с кодировкой win1251
+            c.setFont('Helvetica', 11)
             
-            y = height - 40
-            lines = text.split('\n')
-            
-            for line in lines:
+            for line in text.split('\n'):
+                if y < 50:
+                    c.showPage()
+                    c.setFont('Helvetica', 11)
+                    y = height - 50
+                
                 if line.strip():
-                    # Кодируем русские буквы в win1251
+                    # Кодируем для поддержки русского
                     try:
-                        line_enc = line.encode('windows-1251', 'ignore').decode('windows-1251')
+                        c.drawString(50, y, line.encode('win1251').decode('win1251'))
                     except:
-                        line_enc = line.encode('ascii', 'ignore').decode('ascii')
-                    
-                    c.drawString(40, y, line_enc)
+                        c.drawString(50, y, line)
                     y -= 15
                 else:
                     y -= 10
-                
-                if y < 40:
-                    c.showPage()
-                    c.setFont("Helvetica", 12)
-                    y = height - 40
             
             c.save()
             return tmp.name
     except Exception as e:
-        logger.error(f"PDF ошибка: {e}")
+        logger.error(f"PDF Error: {e}")
         return None
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Главное меню"""
     keyboard = [
         [InlineKeyboardButton("🏠 Аренда квартиры", callback_data='rent')],
         [InlineKeyboardButton("💰 Купля-продажа", callback_data='sale')],
         [InlineKeyboardButton("🔧 Услуги", callback_data='service')]
     ]
     await update.message.reply_text(
-        "👋 Выберите тип договора:",
+        "👋 Добро пожаловать!\nВыберите тип договора:",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
-    return CHOOSING
+    return SELECTING
 
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка кнопок"""
     query = update.callback_query
     await query.answer()
     
     user_id = query.from_user.id
+    contract_type = query.data
     
-    # Вопросы и шаблоны
-    if query.data == 'rent':
-        user_data[user_id] = {
-            'type': 'rent',
-            'questions': [
-                '📍 Введите город:',
-                '📅 Введите дату (например: 15 марта 2025 года):',
-                '👤 ФИО Арендодателя (полностью):',
-                '📄 Паспортные данные Арендодателя (серия, номер, кем выдан):',
-                '🏠 Адрес регистрации Арендодателя:',
-                '👤 ФИО Арендатора (полностью):',
-                '📄 Паспортные данные Арендатора:',
-                '🏠 Адрес регистрации Арендатора:',
-                '🏢 Адрес сдаваемой квартиры:',
-                '💰 Сумма аренды в месяц (цифрами):',
-                '✍️ Сумма аренды прописью:',
-                '⏱️ Срок аренды (например: 11 месяцев):'
-            ],
-            'answers': {},
-            'step': 0
-        }
-    elif query.data == 'sale':
-        user_data[user_id] = {
-            'type': 'sale',
-            'questions': [
-                '📍 Город:',
-                '📅 Дата:',
-                '👤 ФИО Продавца:',
-                '📄 Паспорт Продавца:',
-                '👤 ФИО Покупателя:',
-                '📄 Паспорт Покупателя:',
-                '📦 Товар (что продаётся):',
-                '💰 Сумма сделки (цифрами):',
-                '✍️ Сумма прописью:'
-            ],
-            'answers': {},
-            'step': 0
-        }
-    else:  # service
-        user_data[user_id] = {
-            'type': 'service',
-            'questions': [
-                '📍 Город:',
-                '📅 Дата:',
-                '👤 ФИО Исполнителя:',
-                '👤 ФИО Заказчика:',
-                '🔧 Услуга (что делается):',
-                '💰 Стоимость (цифрами):',
-                '✍️ Стоимость прописью:',
-                '⏱️ Срок оказания:'
-            ],
-            'answers': {},
-            'step': 0
-        }
+    # Создаем сессию пользователя
+    user_sessions[user_id] = {
+        'type': contract_type,
+        'answers': [],
+        'step': 0,
+        'total': len(CONTRACT_TEMPLATES[contract_type]['questions'])
+    }
     
-    await query.edit_message_text(user_data[user_id]['questions'][0])
-    return ASK_QUESTIONS
+    # Отправляем первый вопрос
+    await query.edit_message_text(
+        f"📝 {CONTRACT_TEMPLATES[contract_type]['name']}\n\n"
+        f"Вопрос 1/{user_sessions[user_id]['total']}:\n"
+        f"{CONTRACT_TEMPLATES[contract_type]['questions'][0]}"
+    )
+    return FILLING
 
 async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка ответов"""
     user_id = update.message.from_user.id
     text = update.message.text
     
-    if user_id not in user_data:
+    if user_id not in user_sessions:
         await update.message.reply_text("Начните с /start")
         return ConversationHandler.END
     
-    step = user_data[user_id]['step']
-    answers = user_data[user_id]['answers']
-    questions = user_data[user_id]['questions']
+    session = user_sessions[user_id]
+    contract = CONTRACT_TEMPLATES[session['type']]
     
-    answers[f'q{step}'] = text
+    # Сохраняем ответ
+    session['answers'].append(text)
+    session['step'] += 1
     
-    if step + 1 < len(questions):
-        user_data[user_id]['step'] = step + 1
-        await update.message.reply_text(f"✅ Принято!\n\n{questions[step + 1]}")
-        return ASK_QUESTIONS
-    else:
-        await update.message.reply_text("⏳ Создаю договор...")
-        
-        # Полноценный договор аренды
-        if user_data[user_id]['type'] == 'rent':
-            contract = f"""ДОГОВОР АРЕНДЫ КВАРТИРЫ
-
-г. {answers.get('q0', '______')}                                 «{answers.get('q1', '______')}»
-
-    Гражданин РФ {answers.get('q2', '______')}, паспорт: {answers.get('q3', '______')}, зарегистрированный по адресу: {answers.get('q4', '______')}, именуемый в дальнейшем "Арендодатель", с одной стороны, и
-
-    Гражданин РФ {answers.get('q5', '______')}, паспорт: {answers.get('q6', '______')}, зарегистрированный по адресу: {answers.get('q7', '______')}, именуемый в дальнейшем "Арендатор", с другой стороны, заключили настоящий договор о нижеследующем:
-
-1. ПРЕДМЕТ ДОГОВОРА
-1.1. Арендодатель передает, а Арендатор принимает во временное владение и пользование квартиру, расположенную по адресу: {answers.get('q8', '______')}.
-1.2. Квартира передается в состоянии, пригодном для проживания.
-
-2. АРЕНДНАЯ ПЛАТА
-2.1. Арендная плата за пользование квартирой составляет {answers.get('q9', '______')} ({answers.get('q10', '______')}) рублей в месяц.
-2.2. Арендная плата вносится ежемесячно не позднее 10 числа каждого месяца.
-
-3. СРОК ДЕЙСТВИЯ ДОГОВОРА
-3.1. Договор действует в течение {answers.get('q11', '______')}.
-3.2. Если ни одна из сторон не заявит о расторжении за 30 дней, договор считается продленным.
-
-4. ПОДПИСИ СТОРОН
-
-Арендодатель: ____________________              Арендатор: ____________________
-
-Дата: ____________________"""
-            
-        elif user_data[user_id]['type'] == 'sale':
-            contract = f"""ДОГОВОР КУПЛИ-ПРОДАЖИ
-
-г. {answers.get('q0', '______')}                                 «{answers.get('q1', '______')}»
-
-    Гражданин РФ {answers.get('q2', '______')}, паспорт: {answers.get('q3', '______')}, именуемый в дальнейшем "Продавец", и
-
-    Гражданин РФ {answers.get('q4', '______')}, паспорт: {answers.get('q5', '______')}, именуемый в дальнейшем "Покупатель", заключили настоящий договор:
-
-1. ПРЕДМЕТ ДОГОВОРА
-1.1. Продавец продает, а Покупатель покупает: {answers.get('q6', '______')}.
-
-2. ЦЕНА ДОГОВОРА
-2.1. Цена составляет {answers.get('q7', '______')} ({answers.get('q8', '______')}) рублей.
-2.2. Расчет производится в момент подписания договора.
-
-3. ПЕРЕДАЧА
-3.1. Право собственности переходит к Покупателю после полной оплаты.
-
-4. ПОДПИСИ
-
-Продавец: ____________________              Покупатель: ____________________
-
-Дата: ____________________"""
-            
-        else:  # услуги
-            contract = f"""ДОГОВОР ОКАЗАНИЯ УСЛУГ
-
-г. {answers.get('q0', '______')}                                 «{answers.get('q1', '______')}»
-
-    Гражданин РФ {answers.get('q2', '______')}, именуемый в дальнейшем "Исполнитель", и
-
-    Гражданин РФ {answers.get('q3', '______')}, именуемый в дальнейшем "Заказчик", заключили договор:
-
-1. ПРЕДМЕТ ДОГОВОРА
-1.1. Исполнитель обязуется оказать услуги: {answers.get('q4', '______')}.
-
-2. СТОИМОСТЬ УСЛУГ
-2.1. Стоимость составляет {answers.get('q5', '______')} ({answers.get('q6', '______')}) рублей.
-
-3. СРОКИ
-3.1. Услуги оказываются в срок: {answers.get('q7', '______')}.
-
-4. ПОДПИСИ
-
-Исполнитель: ____________________              Заказчик: ____________________
-
-Дата: ____________________"""
-        
-        # Создаём PDF
-        pdf_path = create_pdf(contract)
-        
-        if pdf_path and os.path.exists(pdf_path):
-            with open(pdf_path, 'rb') as f:
-                await update.message.reply_document(
-                    document=f,
-                    filename="Договор.pdf",
-                    caption="✅ Ваш договор готов. Осталось подписать."
-                )
-            os.unlink(pdf_path)
-        else:
-            await update.message.reply_text(f"📄 Ваш договор (PDF временно недоступен):\n\n{contract}")
-        
-        # Кнопка нового договора
-        keyboard = [[InlineKeyboardButton("🔄 Новый договор", callback_data='new')]]
+    # Если есть еще вопросы
+    if session['step'] < session['total']:
         await update.message.reply_text(
-            "Хотите создать ещё? Нажмите /start",
-            reply_markup=InlineKeyboardMarkup(keyboard)
+            f"✅ Принято!\n\n"
+            f"Вопрос {session['step'] + 1}/{session['total']}:\n"
+            f"{contract['questions'][session['step']]}"
         )
-        
-        del user_data[user_id]
-        return ConversationHandler.END
+        return FILLING
+    
+    # Все вопросы заданы — формируем договор
+    await update.message.reply_text("⚡ Создаю договор...")
+    
+    # Формируем текст договора
+    contract_text = contract['template'].format(*session['answers'])
+    
+    # Создаем PDF
+    pdf_path = generate_pdf(contract_text)
+    
+    if pdf_path:
+        with open(pdf_path, 'rb') as f:
+            await update.message.reply_document(
+                document=f,
+                filename=f"{contract['name']}.pdf",
+                caption="✅ Готово! Подпишите и распечатайте."
+            )
+        os.unlink(pdf_path)
+    else:
+        # Если PDF не создался — отправляем текст
+        await update.message.reply_text(f"📄 Договор:\n\n{contract_text}")
+    
+    # Предлагаем создать новый
+    keyboard = [[InlineKeyboardButton("🔄 Новый договор", callback_data='new')]]
+    await update.message.reply_text(
+        "Хотите еще? Нажмите /start",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    
+    # Очищаем сессию
+    del user_sessions[user_id]
+    return ConversationHandler.END
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отмена"""
     user_id = update.message.from_user.id
-    if user_id in user_data:
-        del user_data[user_id]
+    if user_id in user_sessions:
+        del user_sessions[user_id]
     await update.message.reply_text("Отменено. /start")
     return ConversationHandler.END
 
 def main():
+    """Запуск бота"""
     app = Application.builder().token(BOT_TOKEN).build()
     
+    # Обработчик диалога
     conv_handler = ConversationHandler(
-        entry_points=[CallbackQueryHandler(button_handler)],
+        entry_points=[CallbackQueryHandler(button_callback)],
         states={
-            ASK_QUESTIONS: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_answer)],
+            FILLING: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_answer)]
         },
-        fallbacks=[CommandHandler('cancel', cancel)],
-        allow_reentry=True
+        fallbacks=[CommandHandler('cancel', cancel)]
     )
     
     app.add_handler(CommandHandler("start", start))
     app.add_handler(conv_handler)
     
-    logger.info("✅ Бот с договорами запущен")
+    logger.info("✅ Бот запущен")
     app.run_polling()
 
 if __name__ == "__main__":
